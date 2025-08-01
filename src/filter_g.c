@@ -110,21 +110,14 @@ static void on_process(void *userdata)
     }
 
     // process detection_playback stream
-    if ((out = pw_stream_dequeue_buffer(impl->detection_playback)) != NULL) {
-        pw_log_debug("copying to detection_playback stream");
-
-        // Limit concurrent detections
-        if (active_detections < MAX_CONCURRENT_DETECTIONS){
+    if (active_detections < MAX_CONCURRENT_DETECTIONS){
+        if ((out = pw_stream_dequeue_buffer(impl->detection_playback)) != NULL) {
             copy_buffer(in, out); //detectObjects before copying?
             active_detections++;
             detectObjects_async(out, confThreshold, nmsThreshold, yoloBasePath,
-                           yoloClassesFile, frame_width, frame_height, bVis,
-                           detect_completed_callback, impl);
-        }
-        else{ // skip frame
-            pw_stream_queue_buffer(impl->detection_playback, out);
-            pw_stream_trigger_process(impl->detection_playback);
-        }
+                            yoloClassesFile, frame_width, frame_height, bVis,
+                            detect_completed_callback, impl);
+            }
     }
 
     // return input buffer
