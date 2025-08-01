@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
-#include <getopt.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
@@ -126,11 +125,6 @@ static void on_process(void *userdata)
             pw_stream_queue_buffer(impl->detection_playback, out);
             pw_stream_trigger_process(impl->detection_playback);
         }
-                           
-        // detectObjects(out, confThreshold, nmsThreshold, yoloBasePath,
-        //   yoloClassesFile, frame_width, frame_height, bVis, &detect_done);
-        // pw_stream_queue_buffer(impl->detection_playback, out);
-        // pw_stream_trigger_process(impl->detection_playback);
     }
 
     // return input buffer

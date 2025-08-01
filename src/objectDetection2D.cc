@@ -8,7 +8,6 @@
 
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/highgui.hpp>
 #include <opencv2/core.hpp>
 #include "dataStructures.h"
 
@@ -128,18 +127,13 @@ cv::Rect scaleCoords(const cv::Size& imgShape, const cv::Rect& coords,
 cv::Mat pwbuffer_to_cvmat(struct pw_buffer* buf, uint32_t frame_width, uint32_t frame_height) {
   if (!buf || buf->buffer->n_datas == 0) return {};
   struct spa_data* spa_data = &buf->buffer->datas[0];
-  uint8_t* data = static_cast<uint8_t*>(spa_data->data);
+  auto* data = static_cast<uint8_t*>(spa_data->data);
 
-  // Step 1: Wrap raw YUY2 buffer in cv::Mat
   cv::Mat yuy2_frame(frame_height, frame_width, CV_8UC2, data);
 
-  // Step 2: Convert to RGB
   cv::Mat rgb_frame;
   cv::cvtColor(yuy2_frame, rgb_frame, cv::COLOR_YUV2BGR_YUY2);
 
-  // Step 3: Display or use rgb_frame
-  // cv::imshow("RGB Frame", rgb_frame);
-  // cv::waitKey(1);
   return rgb_frame;
 }
 
@@ -158,191 +152,6 @@ void cvmat_to_pwbuffer(cv::Mat visImg, struct pw_buffer* buf, uint32_t frame_wid
   if (yuy2_frame.total() * yuy2_frame.elemSize() >= bytes_to_copy && spa_data->maxsize >= bytes_to_copy) {
     memcpy(data, yuy2_frame.data, bytes_to_copy);
   }
-}
-
-
-void detectObjects(struct pw_buffer *out_buffer,
-                   float confThreshold,
-                   float nmsThreshold,
-                   const char* basePath,
-                   const char* classesFile,
-                   uint32_t frame_width,
-                   uint32_t frame_height,
-                   bool bVis)
-{
-    string yoloModelWeights = std::string(basePath) + "yolo11s.onnx";
-
-    if (!n_net_loaded) {
-        if (!initialize_nn(yoloModelWeights)) {
-            std::cerr << "Failed to initialize network" << std::endl;
-            return;
-        }
-    }
-    // Load class names from file
-    vector<string> classes;
-    ifstream ifs(std::string(classesFile).c_str());
-    string line;
-    while (getline(ifs, line))
-      classes.push_back(line);
-
-    cv::Mat img = pwbuffer_to_cvmat(out_buffer, frame_width, frame_height);
-    constexpr int inputSize = 640;
-    cv::Size originalSize = img.size();
-
-    // Improved preprocessing with proper letterboxing
-    cv::Mat letterboxed = letterBox(img, cv::Size(inputSize, inputSize));
-
-    // Convert to blob with proper normalization
-    cv::Mat blob;
-    cv::dnn::blobFromImage(letterboxed, blob, 1.0/255.0, cv::Size(inputSize, inputSize),
-                          cv::Scalar(0, 0, 0), true, false);
-
-
-    cv::dnn::Net& net = get_network();
-
-    // Get output layer names
-    vector<cv::String> names = net.getUnconnectedOutLayersNames();
-
-    // Forward pass
-    net.setInput(blob);
-    vector<cv::Mat> netOutput;
-    net.forward(netOutput, names);
-
-    std::cout << "Number of outputs: " << netOutput.size() << std::endl;
-    for (size_t i = 0; i < netOutput.size(); ++i) {
-        std::cout << "Output " << i << " dimensions: " << netOutput[i].dims << std::endl;
-        std::cout << "Output " << i << " size: ";
-        for (int j = 0; j < netOutput[i].dims; ++j) {
-            std::cout << netOutput[i].size[j] << " ";
-        }
-        std::cout << std::endl;
-    }
-
-    if (netOutput.empty()) {
-        cerr << "Error: No network output received" << endl;
-        return;
-    }
-
-    cv::Mat output = netOutput[0];
-
-    // YOLOv11 output format: [1, num_features, num_detections]
-    // Features: [x, y, w, h, class_scores...]
-
-    int dimensions = output.dims;
-    if (dimensions != 3) {
-        cerr << "Error: Expected 3D output tensor, got " << dimensions << "D" << endl;
-        return;
-    }
-
-    int batch_size = output.size[0];  // Should be 1
-    int num_features = output.size[1]; // x, y, w, h + num_classes
-    int num_detections = output.size[2]; // Number of detections (e.g., 8400)
-
-    int num_classes = num_features - 4; // Subtract x, y, w, h
-
-    std::cout << "Batch size: " << batch_size << std::endl;
-    std::cout << "Features: " << num_features << std::endl;
-    std::cout << "Detections: " << num_detections << std::endl;
-    std::cout << "Classes: " << num_classes << std::endl;
-
-    if (num_classes <= 0) {
-        cerr << "Error: Invalid number of classes: " << num_classes << endl;
-        return;
-    }
-
-    // Get output dimensions
-    vector<int> classIds;
-    vector<float> confidences;
-    vector<cv::Rect> boxes;
-
-    auto data = reinterpret_cast<const float*>(output.data);
-
-    // Process each detection
-    for (int d = 0; d < num_detections; ++d) {
-        // Extract bounding box coordinates (center format)
-        float centerX = data[0 * num_detections + d];
-        float centerY = data[1 * num_detections + d];
-        float width = data[2 * num_detections + d];
-        float height = data[3 * num_detections + d];
-
-        // Find class with highest confidence
-        int classId = -1;
-        float maxScore = -FLT_MAX;
-        for (int c = 0; c < num_classes; ++c) {
-            float score = data[(4 + c) * num_detections + d];
-            if (score > maxScore) {
-                maxScore = score;
-                classId = c;
-            }
-        }
-
-        // Only keep detections above confidence threshold
-        if (maxScore > confThreshold) {
-            // Convert from center format to corner format
-            float left = centerX - width / 2.0f;
-            float top = centerY - height / 2.0f;
-
-            // Create rectangle in letterboxed image coordinates
-            cv::Rect box(static_cast<int>(left), static_cast<int>(top),
-                        static_cast<int>(width), static_cast<int>(height));
-
-            // Scale coordinates back to original image size
-            cv::Rect scaledBox = scaleCoords(cv::Size(inputSize, inputSize), box, originalSize);
-
-            boxes.push_back(scaledBox);
-            classIds.push_back(classId);
-            confidences.push_back(maxScore);
-        }
-    }
-
-    // Perform non-maxima suppression
-    vector<int> indices;
-    cv::dnn::NMSBoxes(boxes, confidences, confThreshold, nmsThreshold, indices);
-
-    std::vector<BoundingBox> bBoxes;
-    // Create BoundingBox objects for results
-    for(int idx : indices) {
-        BoundingBox bBox;
-        bBox.roi = boxes[idx];
-        bBox.classID = classIds[idx];
-        bBox.confidence = confidences[idx];
-        bBox.boxID = static_cast<int>(bBoxes.size()); // zero-based unique identifier
-        bBoxes.push_back(bBox);
-    }
-
-    cv::Mat visImg = img.clone();
-    // Show results
-    if(bVis) {
-        for(const auto& box : bBoxes) {
-            // Draw rectangle displaying the bounding box
-            int top, left, width, height;
-            top = box.roi.y;
-            left = box.roi.x;
-            width = box.roi.width;
-            height = box.roi.height;
-            cv::rectangle(visImg, cv::Point(left, top), cv::Point(left+width, top+height), cv::Scalar(0, 255, 0), 2);
-
-            string label = cv::format("%.2f", box.confidence);
-            if (box.classID < static_cast<int>(classes.size())) {
-                label += classes[box.classID] + ":";
-            }
-
-            // Display label at the top of the bounding box
-            int baseLine;
-            cv::Size labelSize = getTextSize(label, cv::FONT_ITALIC, 0.5, 1, &baseLine);
-            top = max(top, labelSize.height);
-            rectangle(visImg, cv::Point(left, static_cast<int>(top - round(1.5*labelSize.height))),
-                     cv::Point(static_cast<int>(left + round(1.5*labelSize.width)), top + baseLine),
-                     cv::Scalar(255, 255, 255), cv::FILLED);
-            cv::putText(visImg, label, cv::Point(left, top), cv::FONT_ITALIC, 0.75, cv::Scalar(0,0,0), 1);
-        }
-
-        // string windowName = "Object classification";
-        // cv::namedWindow(windowName, 1);
-        // cv::imshow(windowName, visImg);
-        // cv::waitKey(1);
-    }
-    cvmat_to_pwbuffer(visImg, out_buffer, frame_width, frame_height);
 }
 
 bool initialize_network_once(const std::string& model_path) {
@@ -406,18 +215,6 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
             net.forward(netOutput, names);
         }
 
-
-        // TODO: Remove debug output
-        std::cout << "Number of outputs: " << netOutput.size() << std::endl;
-        for (size_t i = 0; i < netOutput.size(); ++i) {
-            std::cout << "Output " << i << " dimensions: " << netOutput[i].dims << std::endl;
-            std::cout << "Output " << i << " size: ";
-            for (int j = 0; j < netOutput[i].dims; ++j) {
-                std::cout << netOutput[i].size[j] << " ";
-            }
-            std::cout << std::endl;
-        }
-
         if (netOutput.empty()) {
             cerr << "Error: No network output received" << endl;
             return;
@@ -434,16 +231,11 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
             return;
         }
 
-        int batch_size = output.size[0];  // Should be 1
         int num_features = output.size[1]; // x, y, w, h + num_classes
         int num_detections = output.size[2]; // Number of detections (e.g., 8400)
 
         int num_classes = num_features - 4; // Subtract x, y, w, h
 
-        std::cout << "Batch size: " << batch_size << std::endl;
-        std::cout << "Features: " << num_features << std::endl;
-        std::cout << "Detections: " << num_detections << std::endl;
-        std::cout << "Classes: " << num_classes << std::endl;
 
         if (num_classes <= 0) {
             cerr << "Error: Invalid number of classes: " << num_classes << endl;
@@ -541,7 +333,6 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         success = true;
     } catch (const std::exception& e){
         cout << "detection failed: " << e.what() << endl;
-        // print ("detection failed: %s\n", e.what());
         success = false;
     }
     
