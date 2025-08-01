@@ -14,6 +14,7 @@
 #include <pipewire/pipewire.h>
 
 #include <interface.h>
+#include <stdatomic.h>
 
 
 #define YUY2_BYTES_PER_PIXEL 2
@@ -23,6 +24,8 @@
 
 #define MAX_PATH 512
 
+static _Atomic int active_detections = 0;
+static const int MAX_CONCURRENT_DETECTIONS = 2;
 const char* dataPath = "/path/to/cam_infer_models/";
 char yoloBasePath[MAX_PATH];
 char yoloClassesFile[MAX_PATH];
@@ -69,6 +72,7 @@ static void detect_completed_callback (struct pw_buffer* buffer,
                                       struct impl* impl,
                                       bool success)
 {
+    active_detections--;
     pw_stream_queue_buffer(impl->detection_playback, buffer);
     pw_stream_trigger_process(impl->detection_playback);
 }
@@ -110,10 +114,18 @@ static void on_process(void *userdata)
     if ((out = pw_stream_dequeue_buffer(impl->detection_playback)) != NULL) {
         pw_log_debug("copying to detection_playback stream");
 
-        copy_buffer(in, out); //detectObjects before copying?
-        detectObjects_async(out, confThreshold, nmsThreshold, yoloBasePath,
+        // Limit concurrent detections
+        if (active_detections < MAX_CONCURRENT_DETECTIONS){
+            copy_buffer(in, out); //detectObjects before copying?
+            active_detections++;
+            detectObjects_async(out, confThreshold, nmsThreshold, yoloBasePath,
                            yoloClassesFile, frame_width, frame_height, bVis,
                            detect_completed_callback, impl);
+        }
+        else{ // skip frame
+            pw_stream_queue_buffer(impl->detection_playback, out);
+            pw_stream_trigger_process(impl->detection_playback);
+        }
                            
         // detectObjects(out, confThreshold, nmsThreshold, yoloBasePath,
         //   yoloClassesFile, frame_width, frame_height, bVis, &detect_done);

@@ -19,6 +19,11 @@
 
 using namespace std;
 
+// neural network instance
+cv::dnn::Net net;
+bool n_net_loaded = false;
+std::mutex n_net_mutex;
+
 // Structure to pass data to async thread
 struct AsyncDetectionData {
     struct pw_buffer* buffer;
@@ -33,6 +38,33 @@ struct AsyncDetectionData {
     struct impl* user_data;
 };
 
+bool initialize_nn (const std::string& model_path){
+    std::lock_guard<std::mutex> lock(n_net_mutex);
+    if(n_net_loaded){
+        return true;
+    }
+    try {
+        net = cv::dnn::readNetFromONNX(model_path);
+        //cv::dnn::Net net = cv::dnn::readNetFromDarknet(yoloModelConfiguration, yoloModelWeights);
+        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        //net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+        //net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+
+        if (net.empty()) {
+            cerr << "Error: Network not loaded properly" << endl;
+            return false;
+        }
+        n_net_loaded = true;
+        return true;
+    } catch (const cv::Exception& e){
+        std::cerr << "Error loading neural network: " << e.what() << endl;
+        return false;
+    }
+}
+
+cv::dnn::Net& get_network() {
+    return net;
+}
 
 // Utility function for letterboxing
 cv::Mat letterBox(const cv::Mat& image, const cv::Size& newShape, 
@@ -139,6 +171,13 @@ void detectObjects(struct pw_buffer *out_buffer,
                    bool bVis)
 {
     string yoloModelWeights = std::string(basePath) + "yolo11s.onnx";
+
+    if (!n_net_loaded) {
+        if (!initialize_nn(yoloModelWeights)) {
+            std::cerr << "Failed to initialize network" << std::endl;
+            return;
+        }
+    }
     // Load class names from file
     vector<string> classes;
     ifstream ifs(std::string(classesFile).c_str());
@@ -159,16 +198,7 @@ void detectObjects(struct pw_buffer *out_buffer,
                           cv::Scalar(0, 0, 0), true, false);
 
 
-    cv::dnn::Net net = cv::dnn::readNetFromONNX(yoloModelWeights);
-    //cv::dnn::Net net = cv::dnn::readNetFromDarknet(yoloModelConfiguration, yoloModelWeights);
-    net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-    //net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-    //net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-
-    if (net.empty()) {
-        cerr << "Error: Network not loaded properly" << endl;
-        return;
-    }
+    cv::dnn::Net& net = get_network();
 
     // Get output layer names
     vector<cv::String> names = net.getUnconnectedOutLayersNames();
@@ -315,6 +345,17 @@ void detectObjects(struct pw_buffer *out_buffer,
     cvmat_to_pwbuffer(visImg, out_buffer, frame_width, frame_height);
 }
 
+bool initialize_network_once(const std::string& model_path) {
+    static std::once_flag init_flag;
+    static bool init_success = false;
+
+    std::call_once(init_flag, [&](){
+        init_success = initialize_nn(model_path);
+    });
+
+    return init_success;
+}
+
 // Thread function that does the actual detection
 void detectobjects_worker_thread(AsyncDetectionData* data)
 {
@@ -324,14 +365,27 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         cv::Mat img = pwbuffer_to_cvmat(data->buffer, data->frame_width, data->frame_height);
 
         string yoloModelWeights = std::string(data->basePath) + "yolo11s.onnx";
-        // Load class names from file
-        vector<string> classes;
-        ifstream ifs(std::string(data->classesFile).c_str());
-        string line;
-        while (getline(ifs, line))
-        classes.push_back(line);
-
         
+        if (!initialize_network_once(yoloModelWeights)) {
+            std::cerr << "Failed to initialize network" << std::endl;
+            data->callback(data->buffer, data->user_data, false);
+            delete data;
+            return;
+            }
+        
+        // Cache classes loading (load once per thread or globally)
+        static thread_local std::vector<string> cached_classes;
+        static thread_local std::string cached_classes_file;
+
+        if (cached_classes_file != data->classesFile){
+            cached_classes.clear();
+            ifstream ifs(data->classesFile);
+            string line;
+            while (getline(ifs, line)){
+                cached_classes.push_back(line);
+            }
+            cached_classes_file = data->classesFile;
+        }
         constexpr int inputSize = 640;
         cv::Size originalSize = img.size();
 
@@ -343,26 +397,17 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         cv::dnn::blobFromImage(letterboxed, blob, 1.0/255.0, cv::Size(inputSize, inputSize),
                             cv::Scalar(0, 0, 0), true, false);
 
-
-        cv::dnn::Net net = cv::dnn::readNetFromONNX(yoloModelWeights);
-        //cv::dnn::Net net = cv::dnn::readNetFromDarknet(yoloModelConfiguration, yoloModelWeights);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-        //net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-        //net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-
-        if (net.empty()) {
-            cerr << "Error: Network not loaded properly" << endl;
-            return;
+        std::vector<cv::Mat> netOutput;
+        {
+            std::lock_guard<std::mutex> lock (n_net_mutex);
+            cv::dnn::Net& net = get_network();
+            net.setInput(blob);
+            vector<cv::String> names = net.getUnconnectedOutLayersNames();
+            net.forward(netOutput, names);
         }
 
-        // Get output layer names
-        vector<cv::String> names = net.getUnconnectedOutLayersNames();
 
-        // Forward pass
-        net.setInput(blob);
-        vector<cv::Mat> netOutput;
-        net.forward(netOutput, names);
-
+        // TODO: Remove debug output
         std::cout << "Number of outputs: " << netOutput.size() << std::endl;
         for (size_t i = 0; i < netOutput.size(); ++i) {
             std::cout << "Output " << i << " dimensions: " << netOutput[i].dims << std::endl;
@@ -478,8 +523,8 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
                 cv::rectangle(visImg, cv::Point(left, top), cv::Point(left+width, top+height), cv::Scalar(0, 255, 0), 2);
 
                 string label = cv::format("%.2f", box.confidence);
-                if (box.classID < static_cast<int>(classes.size())) {
-                    label += classes[box.classID] + ":";
+                if (box.classID < static_cast<int>(cached_classes.size())) {
+                    label += cached_classes[box.classID] + ":";
                 }
 
                 // Display label at the top of the bounding box
