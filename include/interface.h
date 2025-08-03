@@ -5,6 +5,9 @@
 #include <pipewire/pipewire.h>
 #include <spa/param/video/format-utils.h>
 
+#pragma once
+extern bool enable_profiling;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

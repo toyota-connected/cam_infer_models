@@ -22,6 +22,7 @@ message("Project source directory: ${CMAKE_CURRENT_SOURCE_DIR}")
 project(cam_yolo_infer LANGUAGES C CXX)
 #project(cam_yolo_infer LANGUAGES C CXX CUDA)
 
+find_package(spdlog REQUIRED)
 
 # OpenCV
 find_package(OpenCV REQUIRED)
@@ -73,6 +74,7 @@ target_link_libraries(filter_g
     stdc++ 
     ${PIPEWIRE_LIBRARIES}
     ${OpenCV_LIBRARIES}
+    spdlog::spdlog
 )
 
 # Set linker language to CXX for proper C++ runtime linking

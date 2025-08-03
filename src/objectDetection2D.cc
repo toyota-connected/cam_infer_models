@@ -15,6 +15,10 @@
 
 #include <thread>
 #include <functional>
+#include <chrono>
+#include "spdlog/spdlog.h"
+#include <spdlog/async.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 using namespace std;
 
@@ -22,6 +26,9 @@ using namespace std;
 cv::dnn::Net net;
 bool n_net_loaded = false;
 std::mutex n_net_mutex;
+
+bool enable_profiling = true;
+auto async_file = spdlog::basic_logger_mt<spdlog::async_factory>("async_file_logger", "logs/async_log.txt");
 
 // Structure to pass data to async thread
 struct AsyncDetectionData {
@@ -38,11 +45,13 @@ struct AsyncDetectionData {
 };
 
 bool initialize_nn (const std::string& model_path){
+    spdlog::set_default_logger(async_file);
     std::lock_guard<std::mutex> lock(n_net_mutex);
     if(n_net_loaded){
         return true;
     }
     try {
+        const auto t1_start = std::chrono::system_clock::now();
         net = cv::dnn::readNetFromONNX(model_path);
         //cv::dnn::Net net = cv::dnn::readNetFromDarknet(yoloModelConfiguration, yoloModelWeights);
         net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
@@ -54,6 +63,9 @@ bool initialize_nn (const std::string& model_path){
             return false;
         }
         n_net_loaded = true;
+        const auto t1_end = std::chrono::system_clock::now();
+        const auto t1_duration = std::chrono::duration_cast<std::chrono::microseconds>(t1_end - t1_start).count();
+        if (enable_profiling) spdlog::info("initialize_nn duration: {} us", t1_duration);
         return true;
     } catch (const cv::Exception& e){
         std::cerr << "Error loading neural network: " << e.what() << endl;
@@ -68,6 +80,9 @@ cv::dnn::Net& get_network() {
 // Utility function for letterboxing
 cv::Mat letterBox(const cv::Mat& image, const cv::Size& newShape, 
                   const cv::Scalar& color = cv::Scalar(114, 114, 114)) {
+  static int t5_count = 0;
+  static long long t5_total_duration = 0;
+  const auto t5_start = std::chrono::steady_clock::now();
     // Calculate the scaling ratio to fit the image within the new shape
   float ratio = std::min(static_cast<float>(newShape.height) / static_cast<float>(image.rows),
                           static_cast<float>(newShape.width) / static_cast<float>(image.cols));
@@ -97,13 +112,26 @@ cv::Mat letterBox(const cv::Mat& image, const cv::Size& newShape,
     cv::Mat paddedImage;
     // Apply padding to reach the desired shape
     cv::copyMakeBorder(resizedImage, paddedImage, padTop, padBottom, padLeft, padRight, cv::BORDER_CONSTANT, color);
-    
+
+    const auto t5_end = std::chrono::steady_clock::now();
+    const auto t5_duration = std::chrono::duration_cast<std::chrono::microseconds>(t5_end - t5_start).count();
+    t5_total_duration += t5_duration;
+    t5_count++;
+    if (t5_count == 10) {
+      double t5_average = static_cast<double>(t5_total_duration) / t5_count;
+      if (enable_profiling) spdlog::info("letterBox {} cycles average duration: {} us", t5_count, t5_average);
+      t5_count = 0;
+      t5_total_duration = 0;
+    }
     return paddedImage;
 }
 
 // Utility function to scale coordinates back to original image
 cv::Rect scaleCoords(const cv::Size& imgShape, const cv::Rect& coords, 
                      const cv::Size& imgOriginalShape) {
+    static int t6_count = 0;
+    static long long t6_total_duration = 0;
+    const auto t6_start = std::chrono::steady_clock::now();
     float gain = std::min(static_cast<float>(imgShape.height) / static_cast<float>(imgOriginalShape.height),
                          static_cast<float>(imgShape.width) / static_cast<float>(imgOriginalShape.width));
 
@@ -122,9 +150,23 @@ cv::Rect scaleCoords(const cv::Size& imgShape, const cv::Rect& coords,
     result.width = std::max(0, std::min(result.width, imgOriginalShape.width - result.x));
     result.height = std::max(0, std::min(result.height, imgOriginalShape.height - result.y));
 
+    const auto t6_end = std::chrono::steady_clock::now();
+    const auto t6_duration = std::chrono::duration_cast<std::chrono::microseconds>(t6_end - t6_start).count();
+    t6_total_duration += t6_duration;
+    t6_count++;
+    if (t6_count == 10) {
+      double t6_average = static_cast<double>(t6_total_duration) / t6_count;
+      if (enable_profiling) spdlog::info("scaleCoords {} cycles average duration: {} us", t6_count, t6_average);
+      t6_count = 0;
+      t6_total_duration = 0;
+  }
     return result;
 }
 cv::Mat pwbuffer_to_cvmat(struct pw_buffer* buf, uint32_t frame_width, uint32_t frame_height) {
+  static int t2_count = 0;
+  static long long t2_total_duration = 0;
+  const auto t2_start = std::chrono::steady_clock::now();
+
   if (!buf || buf->buffer->n_datas == 0) return {};
   struct spa_data* spa_data = &buf->buffer->datas[0];
   auto* data = static_cast<uint8_t*>(spa_data->data);
@@ -134,11 +176,25 @@ cv::Mat pwbuffer_to_cvmat(struct pw_buffer* buf, uint32_t frame_width, uint32_t 
   cv::Mat rgb_frame;
   cv::cvtColor(yuy2_frame, rgb_frame, cv::COLOR_YUV2BGR_YUY2);
 
-  return rgb_frame;
+  const auto t2_end = std::chrono::steady_clock::now();
+  const auto t2_duration = std::chrono::duration_cast<std::chrono::microseconds>(t2_end - t2_start).count();
+  t2_total_duration += t2_duration;
+  t2_count++;
+  if (t2_count == 10) {
+    double t2_average = static_cast<double>(t2_total_duration) / t2_count;
+    if (enable_profiling) spdlog::info("pwbuffer_to_cvmat {} cycles average duration: {} us", t2_count, t2_average);
+    t2_count = 0;
+    t2_total_duration = 0;
+  }
+    return rgb_frame;
 }
 
 void cvmat_to_pwbuffer(cv::Mat visImg, struct pw_buffer* buf, uint32_t frame_width, uint32_t frame_height) {
   if (!buf || visImg.empty()) return;
+
+  static int t3_count = 0;
+  static long long t3_total_duration = 0;
+  const auto t3_start = std::chrono::steady_clock::now();
 
   cv::Mat yuy2_frame;
   cv::resize(visImg, visImg, cv::Size(frame_width, frame_height));
@@ -151,6 +207,16 @@ void cvmat_to_pwbuffer(cv::Mat visImg, struct pw_buffer* buf, uint32_t frame_wid
 
   if (yuy2_frame.total() * yuy2_frame.elemSize() >= bytes_to_copy && spa_data->maxsize >= bytes_to_copy) {
     memcpy(data, yuy2_frame.data, bytes_to_copy);
+  }
+  const auto t3_end = std::chrono::steady_clock::now();
+  const auto t3_duration = std::chrono::duration_cast<std::chrono::microseconds>(t3_end - t3_start).count();
+  t3_total_duration += t3_duration;
+  t3_count++;
+  if (t3_count == 10) {
+    double t3_average = static_cast<double>(t3_total_duration) / t3_count;
+    if (enable_profiling) spdlog::info("cvmat_to_pwbuffer {} cycles average duration: {} us", t3_count, t3_average);
+    t3_count = 0;
+    t3_total_duration = 0;
   }
 }
 
@@ -206,6 +272,9 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         cv::dnn::blobFromImage(letterboxed, blob, 1.0/255.0, cv::Size(inputSize, inputSize),
                             cv::Scalar(0, 0, 0), true, false);
 
+        static int t4_count = 0;
+        static long long t4_total_duration = 0;
+        const auto t4_start = std::chrono::steady_clock::now();
         std::vector<cv::Mat> netOutput;
         {
             std::lock_guard<std::mutex> lock (n_net_mutex);
@@ -213,6 +282,16 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
             net.setInput(blob);
             vector<cv::String> names = net.getUnconnectedOutLayersNames();
             net.forward(netOutput, names);
+        }
+        const auto t4_end = std::chrono::steady_clock::now();
+        const auto t4_duration = std::chrono::duration_cast<std::chrono::microseconds>(t4_end - t4_start).count();
+        t4_total_duration += t4_duration;
+        t4_count++;
+        if (t4_count == 10) {
+          double t4_average = static_cast<double>(t4_total_duration) / t4_count;
+          if (enable_profiling) spdlog::info("detectobjects_worker_thread netOutput section {} cycles average duration: {} us", t4_count, t4_average);
+          t4_count = 0;
+          t4_total_duration = 0;
         }
 
         if (netOutput.empty()) {
