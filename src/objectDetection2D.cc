@@ -54,9 +54,10 @@ bool initialize_nn (const std::string& model_path){
         const auto t1_start = std::chrono::system_clock::now();
         net = cv::dnn::readNetFromONNX(model_path);
         //cv::dnn::Net net = cv::dnn::readNetFromDarknet(yoloModelConfiguration, yoloModelWeights);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-        //net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-        //net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+        //net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        //net.setPreferableBackend(cv::dnn::DNN_BACKEND_INFERENCE_ENGINE);
+        net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+        net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
 
         if (net.empty()) {
             cerr << "Error: Network not loaded properly" << endl;
@@ -271,7 +272,6 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         cv::Mat blob;
         cv::dnn::blobFromImage(letterboxed, blob, 1.0/255.0, cv::Size(inputSize, inputSize),
                             cv::Scalar(0, 0, 0), true, false);
-
         static int t4_count = 0;
         static long long t4_total_duration = 0;
         const auto t4_start = std::chrono::steady_clock::now();
@@ -289,7 +289,7 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         t4_count++;
         if (t4_count == 10) {
           double t4_average = static_cast<double>(t4_total_duration) / t4_count;
-          if (enable_profiling) spdlog::info("detectobjects_worker_thread netOutput section {} cycles average duration: {} us", t4_count, t4_average);
+          if (enable_profiling) spdlog::info("Inference core (L211-216) CUDA {} cycles average duration: {} us", t4_count, t4_average);
           t4_count = 0;
           t4_total_duration = 0;
         }

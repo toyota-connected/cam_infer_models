@@ -14,13 +14,14 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
+set(CUDA_ARCHS "52;61;72;75;86" CACHE STRING "List of architectures to generate device code for")
 
 message("Project source directory: ${CMAKE_CURRENT_SOURCE_DIR}")
 
 
 # Enable both C and C++ languages
-project(cam_yolo_infer LANGUAGES C CXX)
-#project(cam_yolo_infer LANGUAGES C CXX CUDA)
+#project(cam_yolo_infer LANGUAGES C CXX)
+project(cam_yolo_infer LANGUAGES C CXX CUDA)
 
 find_package(spdlog REQUIRED)
 
@@ -34,14 +35,14 @@ pkg_check_modules(SPA REQUIRED libspa-0.2)
 
 
 # CUDA
-#find_package(CUDA REQUIRED)
-#message("${CUDA_LIBRARIES}")
-#find_package(CUDAToolkit REQUIRED)
-#enable_language(CUDA)
-#add_definitions(-DUSE_CUDA)
+enable_language(CUDA)
+message("${CUDA_LIBRARIES}")
+find_package(CUDAToolkit REQUIRED)
+enable_language(CUDA)
+add_definitions(-DUSE_CUDA)
 
 include_directories(${OpenCV_INCLUDE_DIRS}
-#                    ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
+                    ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
                     ${CMAKE_CURRENT_SOURCE_DIR}/include/
                     ${PIPEWIRE_INCLUDE_DIRS}
                     ${SPA_INCLUDE_DIRS}
@@ -74,6 +75,7 @@ target_link_libraries(filter_g
     stdc++ 
     ${PIPEWIRE_LIBRARIES}
     ${OpenCV_LIBRARIES}
+    CUDA::cudart
     spdlog::spdlog
 )
 
