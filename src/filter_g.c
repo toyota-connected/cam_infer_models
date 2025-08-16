@@ -13,8 +13,6 @@
 #include <pipewire/pipewire.h>
 
 #include <interface.h>
-#include <stdatomic.h>
-
 
 #define YUY2_BYTES_PER_PIXEL 2
 #define DEFAULT_BUFFERS 4

@@ -20,6 +20,10 @@
 #include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
+// gRPC includes for model switching
+#include <grpcpp/grpcpp.h>
+#include "coordinator.grpc.pb.h"
+
 using namespace std;
 
 // neural network instance
@@ -29,6 +33,14 @@ std::mutex n_net_mutex;
 
 bool enable_profiling = true;
 auto async_file = spdlog::basic_logger_mt<spdlog::async_factory>("async_file_logger", "logs/async_log.txt");
+
+// Global state for model switching
+static bool g_should_reinitialize = false;
+static bool g_should_stop = false;
+static bool g_reinitializing_in_progress = false; // Prevent multiple simultaneous switches
+static std::mutex g_switch_mutex; // Mutex for switch operations
+static int g_detection_count = 0;
+static const int CHECK_RESPONSE_INTERVAL = 10; // Check response every 10 detections
 
 // Structure to pass data to async thread
 struct AsyncDetectionData {
@@ -44,6 +56,32 @@ struct AsyncDetectionData {
     struct impl* user_data;
 };
 
+std::string get_model_path_for_current_model(const std::string& basePath) {
+    std::string current_model = get_current_model_grpc();
+
+    if (current_model == "traffic_signs") {
+        return basePath + "traffic_signs_yolo11s.onnx";
+    } else if (current_model == "security_mode") {
+        return basePath + "security_mode_yolo11s.onnx";
+    } else {
+        // Default fallback
+        return basePath + "yolo11s.onnx";
+    }
+}
+
+std::string get_class_file_for_current_model(const std::string& basePath) {
+    std::string current_model = get_current_model_grpc();
+
+    if (current_model == "traffic_signs") {
+        return basePath + "coco_traffic.names";
+    } else if (current_model == "security_mode") {
+        return basePath + "coco_security.names";
+    } else {
+        // Default fallback
+        return basePath + "coco.names";
+    }
+}
+
 bool initialize_nn (const std::string& model_path){
     spdlog::set_default_logger(async_file);
     std::lock_guard<std::mutex> lock(n_net_mutex);
@@ -52,9 +90,30 @@ bool initialize_nn (const std::string& model_path){
     }
     try {
         const auto t1_start = std::chrono::system_clock::now();
-        net = cv::dnn::readNetFromONNX(model_path);
-		#ifdef USE_CUDA
-        	net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+
+        // gRPC client initialization
+        bool grpc_connected = init_grpc_client("localhost:50051");
+        if (!grpc_connected) {
+            std::cout << "Failed to connect to gRPC coordinator, using default model" << std::endl;
+            // Fallback to default model when no gRPC server available
+            net = cv::dnn::readNetFromONNX(model_path);
+        } else {
+            std::string selected_model = get_current_model_grpc();
+            std::cout << "gRPC client connected successfully with model: " << selected_model << std::endl;
+
+            std::string actual_model_path = get_model_path_for_current_model(model_path.substr(0, model_path.find_last_of('/') + 1));
+            std::cout << "Loading model: " << actual_model_path << std::endl;
+
+            net = cv::dnn::readNetFromONNX(actual_model_path);
+
+            if (net.empty()) {
+                // Fallback to default model if selected model fails
+                std::cout << "Selected model failed, trying default model..." << std::endl;
+                net = cv::dnn::readNetFromONNX(model_path);
+            }
+        }
+        #ifdef USE_CUDA
+                net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
         	net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
 		#else
         	net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
@@ -72,6 +131,88 @@ bool initialize_nn (const std::string& model_path){
         return true;
     } catch (const cv::Exception& e){
         std::cerr << "Error loading neural network: " << e.what() << endl;
+        return false;
+    }
+}
+
+// Force reinitialization of neural network (for model switching)
+bool reinitialize_nn_force(const std::string& model_path) {
+    spdlog::set_default_logger(async_file);
+    std::lock_guard<std::mutex> lock(n_net_mutex);
+
+    try {
+        std::cout << "Force reinitializing neural network..." << std::endl;
+
+        // Reset the loaded flag to allow reinitialization
+        n_net_loaded = false;
+
+        const auto t1_start = std::chrono::system_clock::now();
+
+        std::string current_model = get_current_model_grpc();
+        cv::dnn::Net new_net;
+
+        if (current_model != "none") {
+            std::string actual_model_path = get_model_path_for_current_model(model_path.substr(0, model_path.find_last_of('/') + 1));
+            std::cout << "Loading new model: " << actual_model_path << std::endl;
+            new_net = cv::dnn::readNetFromONNX(actual_model_path);
+            if (new_net.empty()) {
+                // Fallback to default model if selected model fails
+                std::cout << "Selected model failed, trying default model..." << std::endl;
+                new_net = cv::dnn::readNetFromONNX(model_path);
+            }
+        } else {
+            std::cout << "gRPC not available, using default model..." << std::endl;
+            new_net = cv::dnn::readNetFromONNX(model_path);
+        }
+        if (new_net.empty()) {
+            std::cout << "Failed to load any model, keeping current model" << std::endl;
+            n_net_loaded = true; // Restore flag since we're keeping current model
+            return false;
+        }
+        // Configure new network
+        #ifdef USE_CUDA
+        	net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+        	net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+		#else
+        	net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        	net.setPreferableBackend(cv::dnn::DNN_BACKEND_INFERENCE_ENGINE);
+		#endif
+
+        // Replace the global network
+        net = new_net;
+        n_net_loaded = true;
+
+        const auto t1_end = std::chrono::system_clock::now();
+        const auto t1_duration = std::chrono::duration_cast<std::chrono::microseconds>(t1_end - t1_start).count();
+        if (enable_profiling) spdlog::info("reinitialize_nn_force duration: {} us", t1_duration);
+
+        std::cout << "Neural network reinitialized successfully" << std::endl;
+        return true;
+    } catch (const cv::Exception& e) {
+        std::cerr << "Error during neural network reinitialization: " << e.what() << std::endl;
+        n_net_loaded = true; // Restore flag since we failed
+        return false;
+    }
+}
+
+// Function to reinitialize neural network with model switch
+bool reinitialize_nn_with_model_switch(const std::string& basePath) {
+    try {
+        std::cout << "Reinitializing for model switch..." << std::endl;
+
+        // Keep the existing gRPC stream alive - just reload the neural network
+        std::string current_model = get_current_model_grpc();
+        std::cout << "Switching to model: " << current_model << std::endl;
+        // Force reload the neural network with new model using proper path resolution
+        std::string model_path_for_reinit = get_model_path_for_current_model(basePath);
+        if (!reinitialize_nn_force(model_path_for_reinit)) {
+            std::cout << "Failed to reinitialize neural network" << std::endl;
+            return false;
+        }
+        std::cout << "Model switch completed successfully to: " << current_model << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error during model switch: " << e.what() << std::endl;
         return false;
     }
 }
@@ -165,6 +306,7 @@ cv::Rect scaleCoords(const cv::Size& imgShape, const cv::Rect& coords,
   }
     return result;
 }
+
 cv::Mat pwbuffer_to_cvmat(struct pw_buffer* buf, uint32_t frame_width, uint32_t frame_height) {
   static int t2_count = 0;
   static long long t2_total_duration = 0;
@@ -240,10 +382,47 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
     bool success = false;
 
     try {
+        // Check if we should stop
+        if (g_should_stop) {
+            std::cout << "Detection stopped by server request" << std::endl;
+            data->callback(data->buffer, data->user_data, false);
+            delete data;
+            return;
+        }
+        // Check if we should reinitialize (with mutex to prevent multiple simultaneous switches)
+        {
+            std::lock_guard<std::mutex> switch_lock(g_switch_mutex);
+            if (g_should_reinitialize && !g_reinitializing_in_progress) {
+                g_reinitializing_in_progress = true;
+                std::cout << "Reinitializing due to model switch..." << std::endl;
+                if (reinitialize_nn_with_model_switch(data->basePath)) {
+                    g_should_reinitialize = false;
+                    std::cout << "Model switch completed successfully" << std::endl;
+                } else {
+                    std::cout << "Model switch failed, stopping detection" << std::endl;
+                    g_should_stop = true;
+                }
+                g_reinitializing_in_progress = false;
+            } else if (g_should_reinitialize && g_reinitializing_in_progress) {
+                // Another thread is already handling the switch, just return
+                std::cout << "Model switch already in progress, skipping this detection" << std::endl;
+                data->callback(data->buffer, data->user_data, false);
+                delete data;
+                return;
+            }
+        }
+        // If stop was triggered during reinitialize, exit
+        if (g_should_stop) {
+            std::cout << "Detection stopped after model switch" << std::endl;
+            data->callback(data->buffer, data->user_data, false);
+            delete data;
+            return;
+        }
+
         cv::Mat img = pwbuffer_to_cvmat(data->buffer, data->frame_width, data->frame_height);
 
-        string yoloModelWeights = std::string(data->basePath) + "yolo11s.onnx";
-        
+        string yoloModelWeights = get_model_path_for_current_model(data->basePath);
+
         if (!initialize_network_once(yoloModelWeights)) {
             std::cerr << "Failed to initialize network" << std::endl;
             data->callback(data->buffer, data->user_data, false);
@@ -255,16 +434,31 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         static thread_local std::vector<string> cached_classes;
         static thread_local std::string cached_classes_file;
 
-        if (cached_classes_file != data->classesFile){
+        // Get the correct class file based on current model
+        std::string current_class_file = get_class_file_for_current_model(data->basePath);
+
+        if (cached_classes_file != current_class_file){
             cached_classes.clear();
-            ifstream ifs(data->classesFile);
-            string line;
-            while (getline(ifs, line)){
-                cached_classes.push_back(line);
+            ifstream ifs(current_class_file);
+            if (ifs.is_open()) {
+                string line;
+                while (getline(ifs, line)){
+                    cached_classes.push_back(line);
+                }
+                cached_classes_file = current_class_file;
+            } else {
+                // Fallback to original class file if model-specific one doesn't exist
+                ifstream fallback_ifs(data->classesFile);
+                if (fallback_ifs.is_open()) {
+                    string line;
+                    while (getline(fallback_ifs, line)){
+                        cached_classes.push_back(line);
+                    }
+                    cached_classes_file = data->classesFile;
+                }
             }
-            cached_classes_file = data->classesFile;
         }
-        constexpr int inputSize = 640;
+        constexpr int inputSize = 640; // Changed from 640 to match training size
         cv::Size originalSize = img.size();
 
         // Improved preprocessing with proper letterboxing
@@ -280,7 +474,7 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         std::vector<cv::Mat> netOutput;
         {
             std::lock_guard<std::mutex> lock (n_net_mutex);
-            cv::dnn::Net& net = get_network();
+            net = get_network();
             net.setInput(blob);
             vector<cv::String> names = net.getUnconnectedOutLayersNames();
             net.forward(netOutput, names);
@@ -314,10 +508,7 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
 
         int num_features = output.size[1]; // x, y, w, h + num_classes
         int num_detections = output.size[2]; // Number of detections (e.g., 8400)
-
         int num_classes = num_features - 4; // Subtract x, y, w, h
-
-
         if (num_classes <= 0) {
             cerr << "Error: Invalid number of classes: " << num_classes << endl;
             return;
@@ -373,7 +564,7 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         cv::dnn::NMSBoxes(boxes, confidences, data->confThreshold, data->nmsThreshold, indices);
 
         std::vector<BoundingBox> bBoxes;
-        // Create BoundingBox objects for results
+        // Create BoundingBox objects for results and send via gRPC
         for(int idx : indices) {
             BoundingBox bBox;
             bBox.roi = boxes[idx];
@@ -381,6 +572,47 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
             bBox.confidence = confidences[idx];
             bBox.boxID = static_cast<int>(bBoxes.size()); // zero-based unique identifier
             bBoxes.push_back(bBox);
+
+            // Send each detection via gRPC and handle response
+            string class_name = "unknown";
+            if (bBox.classID < static_cast<int>(cached_classes.size())) {
+                class_name = cached_classes[bBox.classID];
+            }
+
+            int response = send_detection_grpc(bBox, class_name, bBox.confidence, bBox.classID);
+            // Handle gRPC response (only set flags, don't process immediately)
+            if (response == 1) { // Switch model
+                std::cout << "Received switch command from server" << std::endl;
+                std::lock_guard<std::mutex> switch_lock(g_switch_mutex);
+                if (!g_should_reinitialize && !g_reinitializing_in_progress) {
+                    g_should_reinitialize = true;
+                }
+                break; // Stop processing current frame
+            } else if (response == 2) { // Stop
+                std::cout << "Received stop command from server" << std::endl;
+                g_should_stop = true;
+                break; // Stop processing current frame
+            }
+            // response == 0 means continue, response == -1 means error but continue
+        }
+
+        // Check stream response periodically (only if not already switching)
+        {
+            std::lock_guard<std::mutex> switch_lock(g_switch_mutex);
+            if (!g_should_reinitialize && !g_reinitializing_in_progress) {
+                g_detection_count++;
+                if (g_detection_count >= CHECK_RESPONSE_INTERVAL) {
+                    int stream_response = check_stream_response_grpc();
+                    if (stream_response == 1) { // Switch
+                        std::cout << "Stream response: switch model" << std::endl;
+                        g_should_reinitialize = true;
+                    } else if (stream_response == 2) { // Stop
+                        std::cout << "Stream response: stop detection" << std::endl;
+                        g_should_stop = true;
+                    }
+                    g_detection_count = 0;
+                }
+            }
         }
 
         cv::Mat visImg = img.clone();
@@ -416,9 +648,7 @@ void detectobjects_worker_thread(AsyncDetectionData* data)
         cout << "detection failed: " << e.what() << endl;
         success = false;
     }
-    
     data->callback(data->buffer, data->user_data, success);
-
     delete data;
 }
 
@@ -435,7 +665,7 @@ void detectObjects_async(struct pw_buffer *out_buffer,
                         struct impl* user_data)
 {
     // thread data structure
-    AsyncDetectionData* data = new AsyncDetectionData{
+    auto* data = new AsyncDetectionData{
         .buffer        = out_buffer,
         .confThreshold = confThreshold,
         .nmsThreshold  = nmsThreshold,
@@ -450,4 +680,8 @@ void detectObjects_async(struct pw_buffer *out_buffer,
 
     std::thread detection_thread(detectobjects_worker_thread, data);
     detection_thread.detach();
+}
+
+void shutdown_detection_with_grpc() {
+    cleanup_grpc_client();
 }

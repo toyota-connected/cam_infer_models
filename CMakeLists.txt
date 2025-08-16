@@ -24,14 +24,36 @@ project(cam_yolo_infer LANGUAGES C CXX) # C, C++
 find_package(spdlog REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
+
+# Find protoc and grpc_cpp_plugin
+find_program(_PROTOBUF_PROTOC protoc)
+find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
+
+include(common.cmake)
+
 # Find PipeWire using pkg-config
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 pkg_check_modules(SPA REQUIRED libspa-0.2)
+
+set(CAMERA_IDL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/camera_idl")
+set(coordinator_proto_srcs "${CAMERA_IDL_DIR}/gen/coordinator.pb.cc")
+set(coordinator_proto_hdrs "${CAMERA_IDL_DIR}/gen/coordinator.pb.h")
+set(coordinator_grpc_srcs "${CAMERA_IDL_DIR}/gen/coordinator.grpc.pb.cc")
+set(coordinator_grpc_hdrs "${CAMERA_IDL_DIR}/gen/coordinator.grpc.pb.h")
+
+# Custom target to generate C++ proto files
+add_custom_command(
+        OUTPUT "${coordinator_proto_srcs}" "${coordinator_proto_hdrs}" "${coordinator_grpc_srcs}" "${coordinator_grpc_hdrs}"
+        COMMAND ${CAMERA_IDL_DIR}/build.sh cpp
+        WORKING_DIRECTORY ${CAMERA_IDL_DIR}
+        COMMENT "Generating C++ protobuf files from camera_idl"
+)
 
 include_directories(${OpenCV_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}/include/
         ${PIPEWIRE_INCLUDE_DIRS}
         ${SPA_INCLUDE_DIRS}
+        ${CAMERA_IDL_DIR}/gen  # generated proto files
 )
 
 if(WITH_CUDA)
@@ -47,11 +69,41 @@ link_directories(${OpenCV_LIBRARY_DIRS}
                  ${PIPEWIRE_LIBRARY_DIRS}
                 )
 
+# gRPC proto library
+add_library(coordinator_grpc_proto STATIC
+        ${coordinator_grpc_srcs}
+        ${coordinator_grpc_hdrs}
+        ${coordinator_proto_srcs}
+        ${coordinator_proto_hdrs})
+
+target_compile_options(coordinator_grpc_proto PRIVATE -fPIC)
+
+target_link_libraries(coordinator_grpc_proto
+        absl::check
+        ${_REFLECTION}
+        ${_GRPC_GRPCPP}
+        ${_PROTOBUF_LIBPROTOBUF})
+
 # Create a shared library for the C++ detection functions
 add_library(yolo_detection SHARED
            src/objectDetection2D.cc
+           src/grpc_client.cc
            )
 
+target_compile_options(yolo_detection PRIVATE -fPIC)
+
+target_link_libraries(yolo_detection
+        coordinator_grpc_proto
+        ${OpenCV_LIBRARIES}
+        ${_REFLECTION}
+        ${_GRPC_GRPCPP}
+        ${_PROTOBUF_LIBPROTOBUF}
+        spdlog::spdlog
+)
+
+if(WITH_CUDA)
+    target_link_libraries(yolo_detection CUDA::cudart)
+endif ()
 
 # filter_g program
 add_executable(filter_g
