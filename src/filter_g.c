@@ -248,6 +248,8 @@ int main(int argc, char *argv[])
     // Setup camera format
     impl->capture_info = (struct spa_video_info_raw) {
         .format = SPA_VIDEO_FORMAT_YUY2,
+        .size.width = 640,
+        .size.height = 480,
     };
     impl->raw_playback_info = impl->capture_info;
     impl->detection_playback_info = impl->capture_info;
