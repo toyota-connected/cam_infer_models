@@ -53,11 +53,13 @@ bool initialize_nn (const std::string& model_path){
     try {
         const auto t1_start = std::chrono::system_clock::now();
         net = cv::dnn::readNetFromONNX(model_path);
-        //cv::dnn::Net net = cv::dnn::readNetFromDarknet(yoloModelConfiguration, yoloModelWeights);
-        //net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-        //net.setPreferableBackend(cv::dnn::DNN_BACKEND_INFERENCE_ENGINE);
-        net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+		#ifdef USE_CUDA
+        	net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+        	net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+		#else
+        	net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        	net.setPreferableBackend(cv::dnn::DNN_BACKEND_INFERENCE_ENGINE);
+		#endif
 
         if (net.empty()) {
             cerr << "Error: Network not loaded properly" << endl;

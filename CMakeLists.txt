@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 
-add_definitions(-std=c++11)
-
+option(WITH_CUDA "Build with CUDA support" OFF)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 11)
@@ -12,41 +11,37 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Compiler flags
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
-set(CUDA_ARCHS "52;61;72;75;86" CACHE STRING "List of architectures to generate device code for")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fPIC")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fPIC")
 
-message("Project source directory: ${CMAKE_CURRENT_SOURCE_DIR}")
+if(WITH_CUDA)
+    set(CUDA_ARCHS "52;61;72;75;86" CACHE STRING "List of architectures to generate device code for")
+    project(cam_yolo_infer LANGUAGES C CXX CUDA)
+endif()
 
-
-# Enable both C and C++ languages
-#project(cam_yolo_infer LANGUAGES C CXX)
-project(cam_yolo_infer LANGUAGES C CXX CUDA)
+project(cam_yolo_infer LANGUAGES C CXX) # C, C++
 
 find_package(spdlog REQUIRED)
-
-# OpenCV
 find_package(OpenCV REQUIRED)
-
 find_package(PkgConfig REQUIRED)
 # Find PipeWire using pkg-config
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 pkg_check_modules(SPA REQUIRED libspa-0.2)
 
-
-# CUDA
-enable_language(CUDA)
-message("${CUDA_LIBRARIES}")
-find_package(CUDAToolkit REQUIRED)
-enable_language(CUDA)
-add_definitions(-DUSE_CUDA)
-
 include_directories(${OpenCV_INCLUDE_DIRS}
-                    ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/include/
-                    ${PIPEWIRE_INCLUDE_DIRS}
-                    ${SPA_INCLUDE_DIRS}
-                   )
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/
+        ${PIPEWIRE_INCLUDE_DIRS}
+        ${SPA_INCLUDE_DIRS}
+)
+
+if(WITH_CUDA)
+    enable_language(CUDA)
+    message("${CUDA_LIBRARIES}")
+    find_package(CUDAToolkit REQUIRED)
+    add_definitions(-DUSE_CUDA)
+
+    include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+endif()
 
 link_directories(${OpenCV_LIBRARY_DIRS}
                  ${PIPEWIRE_LIBRARY_DIRS}
@@ -75,9 +70,12 @@ target_link_libraries(filter_g
     stdc++ 
     ${PIPEWIRE_LIBRARIES}
     ${OpenCV_LIBRARIES}
-    CUDA::cudart
     spdlog::spdlog
 )
+
+if(WITH_CUDA)
+    target_link_libraries(filter_g CUDA::cudart)
+endif ()
 
 # Set linker language to CXX for proper C++ runtime linking
 set_target_properties(filter_g PROPERTIES
