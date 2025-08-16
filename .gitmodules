@@ -1,0 +1,3 @@
+[submodule "camera_idl"]
+	path = camera_idl
+	url = git@github.com:AElkenawy/camera_idl
