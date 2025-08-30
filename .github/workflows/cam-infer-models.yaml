@@ -86,39 +86,42 @@ jobs:
         id: cache-opencv
         uses: actions/cache@v4
         with:
-          key: ${{ matrix.os }}-opencv
+          key: ${{ 
+            matrix.os == 'ubuntu-20.04' && 'opencv-ubuntu20' ||
+            matrix.os == 'ubuntu-22.04' && 'opencv-ubuntu22' }}
           path: |
-            ${{github.workspace}}/opencv/buildDir/staging/release/*
+            ${{github.workspace}}/opencv_${{ matrix.os }}/buildDir/staging/release
 
       - name: Build opencv
         if: steps.cache-opencv.outputs.cache-hit != 'true'
         working-directory: ${{github.workspace}}
         run: |
-          git clone https://github.com/opencv/opencv.git
-          git clone https://github.com/opencv/opencv_contrib.git
-          git -C opencv checkout 4.x
-          mkdir -p ${{github.workspace}}/build/opencv
-          PKG_CONFIG_PATH=${{ github.workspace }}/opencv/buildDir/staging/release/lib/pkgconfig \
+          git clone https://github.com/opencv/opencv.git opencv_${{ matrix.os }}
+          git clone https://github.com/opencv/opencv_contrib.git opencv_contrib_${{ matrix.os }}
+          git -C opencv_${{ matrix.os }} checkout tags/4.12.0
+          git -C opencv_contrib_${{ matrix.os }} checkout tags/4.12.0
+          mkdir -p ${{ github.workspace }}/build/opencv_${{ matrix.os }}
+          PKG_CONFIG_PATH=${{ github.workspace }}/opencv_${{ matrix.os }}/buildDir/staging/release/lib/pkgconfig \
           CC=/usr/bin/clang CXX=/usr/bin/clang++ \
           cmake \
-            -S ${{ github.workspace }}/opencv \
-            -B ${{ github.workspace }}/build/opencv \
+            -S ${{ github.workspace }}/opencv_${{ matrix.os }} \
+            -B ${{ github.workspace }}/build/opencv_${{ matrix.os }} \
             -D CMAKE_BUILD_TYPE=Release \
             -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging/usr/local \
-            -D CMAKE_INSTALL_PREFIX=/usr/local \
+            -D CMAKE_INSTALL_PREFIX=${{ github.workspace }}/opencv_${{ matrix.os }}/install \
             -D BUILD_NUMBER=${GITHUB_RUN_ID} \
             -D CMAKE_VERBOSE_MAKEFILE=ON \
             \
             -D WITH_OPENVINO=ON \
             -D OPENCV_GENERATE_PKGCONFIG=ON \
-            -D OPENCV_EXTRA_MODULES_PATH=${{ github.workspace }}/opencv_contrib/modules \
-            -D OpenVINO_DIR=${{ github.workspace }}/l_openvino_toolkit_ubuntu20_2022.3.2/runtime/cmake \
-            -D CMAKE_PREFIX_PATH="${{ github.workspace }}/l_openvino_toolkit_ubuntu20_2022.3.2/runtime/cmake" \
+            -D OPENCV_EXTRA_MODULES_PATH=${{ github.workspace }}/opencv_contrib_${{ matrix.os }}/modules \
+            -D OpenVINO_DIR=${{ github.workspace }}/l_openvino_toolkit_${{ matrix.os }}/runtime/cmake \
+            -D CMAKE_PREFIX_PATH="${{ github.workspace }}/l_openvino_toolkit_${{ matrix.os }}/runtime/cmake" \
             \
             -D BUILD_opencv_gapi=OFF \
             -D BUILD_opencv_gapi_samples=OFF \
             -D BUILD_EXAMPLES=ON
-          cmake --build ${{ github.workspace }}/build/opencv -- -j4
+          cmake --build ${{ github.workspace }}/build/opencv_${{ matrix.os }} -- -j4
 
       - name: Cache grpc
         id: cache-grpc
