@@ -40,7 +40,9 @@ jobs:
             \
             cmake g++ git unzip \
             \
-            libusb-1.0-0 libgtk-3-dev libtbb-dev libtbbmalloc2
+            libusb-1.0-0 libgtk-3-dev libtbb-dev \
+            $([[ "${{ matrix.os }}" == "ubuntu-20.04" ]] && echo "libtbb2") \
+            $([[ "${{ matrix.os }}" == "ubuntu-22.04" ]] && echo "libtbbmalloc2")
 
           sudo apt-get -o DPkg::Lock::Timeout=1200 -y install \
             build-essential autoconf libtool pkg-config
