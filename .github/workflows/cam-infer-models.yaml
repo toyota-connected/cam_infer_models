@@ -38,8 +38,6 @@ jobs:
           sudo apt-get -o DPkg::Lock::Timeout=1200 -y update
           sudo apt-get -o DPkg::Lock::Timeout=1200 -y install \
             \
-            libspdlog-dev \
-            \
             cmake g++ git unzip \
             \
             libusb-1.0-0 libgtk-3-dev libtbb-dev libtbbmalloc2
