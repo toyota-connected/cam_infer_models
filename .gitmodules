@@ -1,3 +1,6 @@
 [submodule "camera_idl"]
 	path = camera_idl
 	url = https://github.com/AElkenawy/camera_idl
+[submodule "third_party/spdlog"]
+	path = third_party/spdlog
+	url = https://github.com/gabime/spdlog
