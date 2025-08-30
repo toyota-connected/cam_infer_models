@@ -86,7 +86,7 @@ jobs:
         id: cache-opencv
         uses: actions/cache@v4
         with:
-          key: ${{ 
+          key: ${{
             matrix.os == 'ubuntu-20.04' && 'opencv-ubuntu20' ||
             matrix.os == 'ubuntu-22.04' && 'opencv-ubuntu22' }}
           path: |
@@ -127,15 +127,15 @@ jobs:
         id: cache-grpc
         uses: actions/cache@v4
         with:
-          key: ${{ matrix.os }}-grpc
+          key: grpc
           path: |
-            ${{github.workspace}}/grpc/buildDir/staging/release/*
+            ${{github.workspace}}/grpc/buildDir/staging/release/
 
       - name: Build grpc
         if: steps.cache-grpc.outputs.cache-hit != 'true'
         working-directory: ${{github.workspace}}
         run: |
-          git clone --recurse-submodules -b v1.74.0 --depth 1 --shallow-submodules https://github.com/grpc/grpc.git
+          git clone --recurse-submodules -b v1.71.0 --depth 1 --shallow-submodules https://github.com/grpc/grpc.git
           mkdir -p ${{github.workspace}}/build/grpc
           PKG_CONFIG_PATH=${{ github.workspace }}/grpc/buildDir/staging/release/lib/pkgconfig \
           CC=/usr/bin/clang CXX=/usr/bin/clang++ \
