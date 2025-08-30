@@ -55,18 +55,28 @@ jobs:
         id: cache-openvino
         uses: actions/cache@v4
         with:
-          key: openvino-2022.3.2
-          path: |
-            ${{ github.workspace }}/l_openvino_toolkit_ubuntu20_2022.3.2
+          key: ${{ 
+            matrix.os == 'ubuntu-20.04' && 'openvino-2025.1.0-ubuntu20' ||
+            matrix.os == 'ubuntu-22.04' && 'openvino-2025.1.0-ubuntu22' }}
+          path: ${{ github.workspace }}/l_openvino_toolkit_${{ matrix.os }}
 
       - name: Install openvino
         if: steps.cache-opencv.outputs.cache-hit != 'true'
         working-directory: ${{github.workspace}}
         run: |
-          wget https://storage.openvinotoolkit.org/repositories/openvino/packages/2022.3.2/linux/l_openvino_toolkit_ubuntu20_2022.3.2.9279.e2c7e4d7b4d_x86_64.tgz
-          tar -xvzf l_openvino_toolkit_ubuntu20_2022.3.2.9279.e2c7e4d7b4d_x86_64.tgz
-          mv l_openvino_toolkit_ubuntu20_2022.3.2.9279.e2c7e4d7b4d_x86_64 l_openvino_toolkit_ubuntu20_2022.3.2
-          cd l_openvino_toolkit_ubuntu20_2022.3.2
+          if [[ "${{ matrix.os }}" == "ubuntu-20.04" ]]; then
+            OPENVINO_FILE=openvino_toolkit_ubuntu20_2025.1.0.18503.6fec06580ab_x86_64.tgz
+          elif [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            OPENVINO_FILE=openvino_toolkit_ubuntu22_2025.1.0.18503.6fec06580ab_x86_64.tgz
+          else
+            echo "Unsupported OS: ${{ matrix.os }}"
+            exit 1
+          fi
+          wget https://storage.openvinotoolkit.org/repositories/openvino/packages/2025.1/linux/${OPENVINO_FILE}
+          tar -xvzf ${OPENVINO_FILE}
+          DIR_NAME=$(basename ${OPENVINO_FILE} .tgz)
+          mv ${DIR_NAME} l_openvino_toolkit_${{ matrix.os }}
+          cd l_openvino_toolkit_${{ matrix.os }}
           sudo -E ./install_dependencies/install_openvino_dependencies.sh
           source ./setupvars.sh
           echo "OpenVINO environment sourced"
