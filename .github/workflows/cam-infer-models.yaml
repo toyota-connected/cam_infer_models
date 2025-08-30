@@ -90,7 +90,7 @@ jobs:
             matrix.os == 'ubuntu-20.04' && 'opencv-ubuntu20' ||
             matrix.os == 'ubuntu-22.04' && 'opencv-ubuntu22' }}
           path: |
-            ${{github.workspace}}/opencv_${{ matrix.os }}/buildDir/staging/release
+            ${{ github.workspace }}/build/staging/
 
       - name: Build opencv
         if: steps.cache-opencv.outputs.cache-hit != 'true'
@@ -101,14 +101,12 @@ jobs:
           git -C opencv_${{ matrix.os }} checkout tags/4.12.0
           git -C opencv_contrib_${{ matrix.os }} checkout tags/4.12.0
           mkdir -p ${{ github.workspace }}/build/opencv_${{ matrix.os }}
-          PKG_CONFIG_PATH=${{ github.workspace }}/opencv_${{ matrix.os }}/buildDir/staging/release/lib/pkgconfig \
           CC=/usr/bin/clang CXX=/usr/bin/clang++ \
           cmake \
             -S ${{ github.workspace }}/opencv_${{ matrix.os }} \
             -B ${{ github.workspace }}/build/opencv_${{ matrix.os }} \
             -D CMAKE_BUILD_TYPE=Release \
-            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging/usr/local \
-            -D CMAKE_INSTALL_PREFIX=${{ github.workspace }}/opencv_${{ matrix.os }}/install \
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging/ \
             -D BUILD_NUMBER=${GITHUB_RUN_ID} \
             -D CMAKE_VERBOSE_MAKEFILE=ON \
             \
@@ -129,7 +127,7 @@ jobs:
         with:
           key: grpc
           path: |
-            ${{github.workspace}}/grpc/buildDir/staging/release/
+            ${{ github.workspace }}/build/staging/
 
       - name: Build grpc
         if: steps.cache-grpc.outputs.cache-hit != 'true'
@@ -137,7 +135,6 @@ jobs:
         run: |
           git clone --recurse-submodules -b v1.71.0 --depth 1 --shallow-submodules https://github.com/grpc/grpc.git
           mkdir -p ${{github.workspace}}/build/grpc
-          PKG_CONFIG_PATH=${{ github.workspace }}/grpc/buildDir/staging/release/lib/pkgconfig \
           CC=/usr/bin/clang CXX=/usr/bin/clang++ \
           cmake \
             -S ${{ github.workspace }}/grpc \
@@ -145,7 +142,7 @@ jobs:
             -D gRPC_INSTALL=ON \
             -D gRPC_BUILD_TESTS=OFF \
             -D CMAKE_CXX_STANDARD=17 \
-            -D CMAKE_INSTALL_PREFIX=${{ github.workspace }}/install/grpc
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging/
 
           cmake --build ${{ github.workspace }}/build/grpc -- -j4
           cmake --install ${{ github.workspace }}/build/grpc
