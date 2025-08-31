@@ -90,7 +90,7 @@ jobs:
             matrix.os == 'ubuntu-20.04' && 'opencv-ubuntu20' ||
             matrix.os == 'ubuntu-22.04' && 'opencv-ubuntu22' }}
           path: |
-            ${{ github.workspace }}/build/staging/
+            ${{ github.workspace }}/build/staging
 
       - name: Build opencv
         if: steps.cache-opencv.outputs.cache-hit != 'true'
@@ -106,7 +106,7 @@ jobs:
             -S ${{ github.workspace }}/opencv_${{ matrix.os }} \
             -B ${{ github.workspace }}/build/opencv_${{ matrix.os }} \
             -D CMAKE_BUILD_TYPE=Release \
-            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging/ \
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging \
             -D BUILD_NUMBER=${GITHUB_RUN_ID} \
             -D CMAKE_VERBOSE_MAKEFILE=ON \
             \
@@ -127,7 +127,7 @@ jobs:
         with:
           key: grpc
           path: |
-            ${{ github.workspace }}/build/staging/
+            ${{ github.workspace }}/build/staging
 
       - name: Build grpc
         if: steps.cache-grpc.outputs.cache-hit != 'true'
@@ -141,8 +141,9 @@ jobs:
             -B ${{ github.workspace }}/build/grpc \
             -D gRPC_INSTALL=ON \
             -D gRPC_BUILD_TESTS=OFF \
+            -D CMAKE_BUILD_TYPE=Release \
             -D CMAKE_CXX_STANDARD=17 \
-            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging/
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging
 
           cmake --build ${{ github.workspace }}/build/grpc -- -j4
           cmake --install ${{ github.workspace }}/build/grpc
