@@ -45,7 +45,7 @@ jobs:
             $([[ "${{ matrix.os }}" == "ubuntu-22.04" ]] && echo "libtbbmalloc2")
 
           sudo apt-get -o DPkg::Lock::Timeout=1200 -y install \
-            build-essential autoconf libtool pkg-config
+            build-essential autoconf libtool pkg-config zlib1g-dev
  
             
           cmake --version
@@ -143,7 +143,8 @@ jobs:
             -D gRPC_BUILD_TESTS=OFF \
             -D CMAKE_BUILD_TYPE=Release \
             -D CMAKE_CXX_STANDARD=17 \
-            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging \
+            -D gRPC_ZLIB_PROVIDER=package
 
           cmake --build ${{ github.workspace }}/build/grpc -- -j4
           cmake --install ${{ github.workspace }}/build/grpc
