@@ -45,7 +45,9 @@ jobs:
             $([[ "${{ matrix.os }}" == "ubuntu-22.04" ]] && echo "libtbbmalloc2")
 
           sudo apt-get -o DPkg::Lock::Timeout=1200 -y install \
-            build-essential autoconf libtool pkg-config zlib1g-dev
+            build-essential autoconf libtool pkg-config zlib1g-dev \
+            \
+            meson ninja-build 
  
             
           cmake --version
@@ -148,3 +150,21 @@ jobs:
 
           cmake --build ${{ github.workspace }}/build/grpc -- -j4
           cmake --install ${{ github.workspace }}/build/grpc
+          
+      - name: Cache pipewire
+        id: cache-pipewire
+        uses: actions/cache@v4
+        with:
+          key: pipewire
+          path: |
+            ${{ github.workspace }}/build/staging
+
+      - name: Build pipewire
+        if: steps.cache-pipewire.outputs.cache-hit != 'true'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git clone --branch 1.4.7 --depth 1 https://gitlab.freedesktop.org/pipewire/pipewire.git
+          meson setup build/pipewire pipewire \
+            --prefix=${{ github.workspace }}/build/staging
+          meson compile -C build/pipewire
+          meson install -C build/pipewire
