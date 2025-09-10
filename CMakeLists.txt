@@ -21,6 +21,7 @@ endif()
 
 project(cam_yolo_infer LANGUAGES C CXX) # C, C++
 
+add_subdirectory(third_party/spdlog)
 find_package(spdlog REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)

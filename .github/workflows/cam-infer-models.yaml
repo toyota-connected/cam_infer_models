@@ -1,0 +1,170 @@
+name: "cam_infer_models"
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened, closed ]
+  release:
+    types: [ published, created, edited ]
+  workflow_dispatch:
+    
+
+jobs:
+  infer_models:
+    permissions:
+      contents: read
+      pull-requests: write
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+          persist-credentials: false
+
+      - name: Fetch cam_infer_models
+        working-directory: ${{github.workspace}}
+        run: |
+          git clone https://github.com/AElkenawy/cam_infer_models.git
+          cd cam_infer_models
+          git submodule update --init --recursive
+      
+      - name: Install runtime packages
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=1200 -y update
+          sudo apt-get -o DPkg::Lock::Timeout=1200 -y install \
+            \
+            cmake g++ git unzip \
+            \
+            libusb-1.0-0 libgtk-3-dev libtbb-dev \
+            $([[ "${{ matrix.os }}" == "ubuntu-20.04" ]] && echo "libtbb2") \
+            $([[ "${{ matrix.os }}" == "ubuntu-22.04" ]] && echo "libtbbmalloc2")
+
+          sudo apt-get -o DPkg::Lock::Timeout=1200 -y install \
+            build-essential autoconf libtool pkg-config zlib1g-dev \
+            \
+            meson ninja-build 
+ 
+            
+          cmake --version
+          gcc --version
+
+      - name: Cache OpenVINO
+        id: cache-openvino
+        uses: actions/cache@v4
+        with:
+          key: ${{ 
+            matrix.os == 'ubuntu-20.04' && 'openvino-2025.1.0-ubuntu20' ||
+            matrix.os == 'ubuntu-22.04' && 'openvino-2025.1.0-ubuntu22' }}
+          path: ${{ github.workspace }}/l_openvino_toolkit_${{ matrix.os }}
+
+      - name: Install openvino
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        working-directory: ${{github.workspace}}
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-20.04" ]]; then
+            OPENVINO_FILE=openvino_toolkit_ubuntu20_2025.1.0.18503.6fec06580ab_x86_64.tgz
+          elif [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            OPENVINO_FILE=openvino_toolkit_ubuntu22_2025.1.0.18503.6fec06580ab_x86_64.tgz
+          else
+            echo "Unsupported OS: ${{ matrix.os }}"
+            exit 1
+          fi
+          wget https://storage.openvinotoolkit.org/repositories/openvino/packages/2025.1/linux/${OPENVINO_FILE}
+          tar -xvzf ${OPENVINO_FILE}
+          DIR_NAME=$(basename ${OPENVINO_FILE} .tgz)
+          mv ${DIR_NAME} l_openvino_toolkit_${{ matrix.os }}
+          cd l_openvino_toolkit_${{ matrix.os }}
+          sudo -E ./install_dependencies/install_openvino_dependencies.sh
+          source ./setupvars.sh
+          echo "OpenVINO environment sourced"
+      
+
+      - name: Cache opencv
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          key: ${{
+            matrix.os == 'ubuntu-20.04' && 'opencv-ubuntu20' ||
+            matrix.os == 'ubuntu-22.04' && 'opencv-ubuntu22' }}
+          path: |
+            ${{ github.workspace }}/build/staging
+
+      - name: Build opencv
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        working-directory: ${{github.workspace}}
+        run: |
+          git clone https://github.com/opencv/opencv.git opencv_${{ matrix.os }}
+          git clone https://github.com/opencv/opencv_contrib.git opencv_contrib_${{ matrix.os }}
+          git -C opencv_${{ matrix.os }} checkout tags/4.12.0
+          git -C opencv_contrib_${{ matrix.os }} checkout tags/4.12.0
+          mkdir -p ${{ github.workspace }}/build/opencv_${{ matrix.os }}
+          CC=/usr/bin/clang CXX=/usr/bin/clang++ \
+          cmake \
+            -S ${{ github.workspace }}/opencv_${{ matrix.os }} \
+            -B ${{ github.workspace }}/build/opencv_${{ matrix.os }} \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging \
+            -D BUILD_NUMBER=${GITHUB_RUN_ID} \
+            -D CMAKE_VERBOSE_MAKEFILE=ON \
+            \
+            -D WITH_OPENVINO=ON \
+            -D OPENCV_GENERATE_PKGCONFIG=ON \
+            -D OPENCV_EXTRA_MODULES_PATH=${{ github.workspace }}/opencv_contrib_${{ matrix.os }}/modules \
+            -D OpenVINO_DIR=${{ github.workspace }}/l_openvino_toolkit_${{ matrix.os }}/runtime/cmake \
+            -D CMAKE_PREFIX_PATH="${{ github.workspace }}/l_openvino_toolkit_${{ matrix.os }}/runtime/cmake" \
+            \
+            -D BUILD_opencv_gapi=OFF \
+            -D BUILD_opencv_gapi_samples=OFF \
+            -D BUILD_EXAMPLES=ON
+          cmake --build ${{ github.workspace }}/build/opencv_${{ matrix.os }} -- -j4
+
+      - name: Cache grpc
+        id: cache-grpc
+        uses: actions/cache@v4
+        with:
+          key: grpc
+          path: |
+            ${{ github.workspace }}/build/staging
+
+      - name: Build grpc
+        if: steps.cache-grpc.outputs.cache-hit != 'true'
+        working-directory: ${{github.workspace}}
+        run: |
+          git clone --recurse-submodules -b v1.71.0 --depth 1 --shallow-submodules https://github.com/grpc/grpc.git
+          mkdir -p ${{github.workspace}}/build/grpc
+          CC=/usr/bin/clang CXX=/usr/bin/clang++ \
+          cmake \
+            -S ${{ github.workspace }}/grpc \
+            -B ${{ github.workspace }}/build/grpc \
+            -D gRPC_INSTALL=ON \
+            -D gRPC_BUILD_TESTS=OFF \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D CMAKE_CXX_STANDARD=17 \
+            -D CMAKE_STAGING_PREFIX=${{ github.workspace }}/build/staging \
+            -D gRPC_ZLIB_PROVIDER=package
+
+          cmake --build ${{ github.workspace }}/build/grpc -- -j4
+          cmake --install ${{ github.workspace }}/build/grpc
+          
+      - name: Cache pipewire
+        id: cache-pipewire
+        uses: actions/cache@v4
+        with:
+          key: pipewire
+          path: |
+            ${{ github.workspace }}/build/staging
+
+      - name: Build pipewire
+        if: steps.cache-pipewire.outputs.cache-hit != 'true'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git clone --branch 1.4.7 --depth 1 https://gitlab.freedesktop.org/pipewire/pipewire.git
+          meson setup build/pipewire pipewire \
+            --prefix=${{ github.workspace }}/build/staging
+          meson compile -C build/pipewire
+          meson install -C build/pipewire
