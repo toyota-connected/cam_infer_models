@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 option(WITH_CUDA "Build with CUDA support" OFF)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set C standard
@@ -26,11 +26,29 @@ find_package(spdlog REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-# Find protoc and grpc_cpp_plugin
-find_program(_PROTOBUF_PROTOC protoc)
-find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
+set(gRPC_INSTALL OFF CACHE BOOL "Disable gRPC installation")
+set(protobuf_INSTALL OFF CACHE BOOL "Disable protobuf installation")
+set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "Disable abseil installation")
+set(utf8_range_ENABLE_INSTALL OFF CACHE BOOL "Disable utf8_range installation")
 
-include(common.cmake)
+# Include gRPC as submodule
+add_subdirectory(third_party/grpc ${CMAKE_CURRENT_BINARY_DIR}/grpc EXCLUDE_FROM_ALL)
+message(STATUS "Using gRPC via add_subdirectory.")
+
+# Set convenience variables (common.cmake GRPC_AS_SUBMODULE case)
+set(_PROTOBUF_LIBPROTOBUF libprotobuf)
+set(_REFLECTION grpc++_reflection)
+set(_ORCA_SERVICE grpcpp_orca_service)
+set(_GRPC_GRPCPP grpc++)
+
+# Compiler executables (as common.cmake GRPC_AS_SUBMODULE case)
+if(CMAKE_CROSSCOMPILING)
+    find_program(_PROTOBUF_PROTOC protoc)
+    find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
+else()
+    set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
+    set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+endif()
 
 # Find PipeWire using pkg-config
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
