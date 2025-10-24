@@ -26,7 +26,6 @@ static const int MAX_CONCURRENT_DETECTIONS = 2;
 const char* dataPath = "/path/to/cam_infer_models/";
 char yoloBasePath[MAX_PATH];
 char yoloClassesFile[MAX_PATH];
-char yoloModelWeights[MAX_PATH];
 
 uint32_t frame_width;
 uint32_t frame_height;
@@ -82,7 +81,6 @@ static void on_process(void *userdata)
     // construct paths
     snprintf(yoloBasePath, MAX_PATH, "%syolo/", dataPath);
     snprintf(yoloClassesFile, MAX_PATH, "%scoco.names", yoloBasePath);
-    snprintf(yoloModelWeights, MAX_PATH, "%syolo11s.onnx", yoloBasePath);
 
     float confThreshold = 0.7;
     float nmsThreshold = 0.4;
